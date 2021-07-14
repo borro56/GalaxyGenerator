@@ -1,0 +1,461 @@
+﻿//TODO: Redo registers
+
+#include "Includes/PlanetUtils.cginc"
+#include "Includes/PlanetNoises.cginc"
+
+#pragma kernel GenerateFieldBase
+#pragma kernel GenerateFieldVertexes
+#pragma kernel Raycast
+
+const float e = 2.71828;
+
+//Common
+int fieldLength;
+int cellsLength;
+float isolevel;
+float3 offset;
+float3 noiseOffset;
+float3 size;
+float3 areaSize;
+float3 boundsMin;
+float3 boundsMax;
+
+//Downsamples
+int leftDown;
+int rightDown;
+int upDown;
+int downDown;
+int frontDown;
+int backDown;
+
+//Noise
+float cavesFrequency;
+float surfaceFrequency;
+float smoothRange;
+float surfaceHeight;
+float athmosphereHeight;
+
+//Lookup Tables
+StructuredBuffer<int> triTable;
+StructuredBuffer<int> edgeTable;
+
+//Ray parameters
+float3 rayPos;
+float3 rayDir;
+float rayLength;
+RWStructuredBuffer<float> rayDistances;
+
+//Output
+RWStructuredBuffer<FieldCell> field;
+RWStructuredBuffer<FieldVertex> vertexes;
+RWStructuredBuffer<int> bounds;
+
+int GetIndex(int x, int y, int z)
+{
+	return x + y * fieldLength + z * fieldLength * fieldLength;
+}
+
+void CheckBounds(float3 pos)
+{
+	InterlockedMin(bounds[0], (int)(pos.x * 10000));
+	InterlockedMin(bounds[1], (int)(pos.y * 10000));
+	InterlockedMin(bounds[2], (int)(pos.z * 10000));
+
+	InterlockedMax(bounds[3], (int)(pos.x * 10000));
+	InterlockedMax(bounds[4], (int)(pos.y * 10000));
+	InterlockedMax(bounds[5], (int)(pos.z * 10000));
+}
+
+float getNoise(float3 pos)
+{
+	return planetNoise(pos,
+		areaSize,
+		surfaceFrequency,
+		surfaceHeight,
+		athmosphereHeight,
+		noiseOffset,
+		smoothRange,
+		cavesFrequency);
+}
+
+float getLodNoiseXY(float3 pos, float levelSize)
+{
+	float3 pos000 = float3(	
+		(int)(pos.x / levelSize) * levelSize,
+		(int)(pos.y / levelSize) * levelSize,
+		pos.z);
+
+	float3 pos100 = pos000 + float3(1, 0, 0)*levelSize;
+	float3 pos010 = pos000 + float3(0, 1, 0)*levelSize;
+	float3 pos110 = pos000 + float3(1, 1, 0)*levelSize;
+
+	float t1 = abs(pos.x - pos000.x) / levelSize;
+	float t2 = abs(pos.y - pos000.y) / levelSize;
+
+	float v000 = getNoise(pos000);
+	float v100 = getNoise(pos100);
+	float v010 = getNoise(pos010);
+	float v110 = getNoise(pos110);
+
+	return lerp(lerp(v000, v100, t1), lerp(v010, v110, t1), t2);
+}
+
+float getLodNoiseXZ(float3 pos, float levelSize)
+{
+	float3 pos000 = float3(	
+		(int)(pos.x / levelSize) * levelSize,
+		pos.y,
+		(int)(pos.z / levelSize) * levelSize);
+
+	float3 pos100 = pos000 + float3(1, 0, 0)*levelSize;
+	float3 pos001 = pos000 + float3(0, 0, 1)*levelSize;
+	float3 pos101 = pos000 + float3(1, 0, 1)*levelSize;
+
+	float t1 = abs(pos.x - pos000.x) / levelSize;
+	float t2 = abs(pos.z - pos000.z) / levelSize;
+
+	float v000 = getNoise(pos000);
+	float v100 = getNoise(pos100);
+	float v001 = getNoise(pos001);
+	float v101 = getNoise(pos101);
+
+	return lerp(lerp(v000, v100, t1), lerp(v001, v101, t1), t2);
+}
+
+float getLodNoiseYZ(float3 pos, float levelSize)
+{
+	float3 pos000 = float3(
+		pos.x,
+		(int)(pos.y / levelSize) * levelSize,		
+		(int)(pos.z / levelSize) * levelSize);
+
+	float3 pos010 = pos000 + float3(0, 1, 0)*levelSize;
+	float3 pos001 = pos000 + float3(0, 0, 1)*levelSize;
+	float3 pos011 = pos000 + float3(0, 1, 1)*levelSize;
+
+	float t1 = abs(pos.y - pos000.y) / levelSize;
+	float t2 = abs(pos.z - pos000.z) / levelSize;
+
+	float v000 = getNoise(pos000);
+	float v010 = getNoise(pos010);
+	float v001 = getNoise(pos001);
+	float v011 = getNoise(pos011);
+
+	return lerp(lerp(v000, v010, t1), lerp(v001, v011, t1), t2);
+}
+
+
+float getLodNoise(float3 pos, float levelSize)
+{
+	float3 pos000 = float3((int)(pos.x / levelSize) * levelSize, 
+						   (int)(pos.y / levelSize) * levelSize,
+						   (int)(pos.z / levelSize) * levelSize);
+
+	float3 pos100 = pos000 + float3(levelSize, 0, 0);
+	float3 pos001 = pos000 + float3(0, 0, levelSize);
+	float3 pos101 = pos000 + float3(levelSize, 0, levelSize);
+
+	float3 pos010 = pos000 + float3(0, levelSize, 0);
+	float3 pos110 = pos000 + float3(levelSize, levelSize, 0);
+	float3 pos011 = pos000 + float3(0, levelSize, levelSize);
+	float3 pos111 = pos000 + float3(levelSize, levelSize, levelSize);
+
+	float tx = abs(pos.x - pos000.x) / levelSize;
+	float ty = abs(pos.y - pos000.y) / levelSize;
+	float tz = abs(pos.z - pos000.z) / levelSize;
+
+	float v000 = getNoise(pos000);
+	float v100 = getNoise(pos100);
+	float v001 = getNoise(pos001);
+	float v101 = getNoise(pos101);
+
+	float v010 = getNoise(pos010);
+	float v110 = getNoise(pos110);
+	float v011 = getNoise(pos011);
+	float v111 = getNoise(pos111);
+
+	return lerp(
+		lerp(lerp(v000, v010, ty), lerp(v100, v110, ty), tx),
+		lerp(lerp(v001, v011, ty), lerp(v101, v111, ty), tx),
+		tz);
+}
+
+[numthreads(8, 8, 8)]
+void GenerateFieldBase(uint3 id : SV_DispatchThreadID)
+{
+	int index = GetIndex(id.x, id.y, id.z);
+	float3 pos = float3(id.x, id.y, id.z) / cellsLength * size + offset;
+	field[index].position = pos;
+
+	int down = 1;
+	int axis = 0;
+	float sideSize = size.x / cellsLength;
+	if (id.x == 0 && leftDown > 1)
+		{ down = leftDown; axis = 0; }
+	if (id.y == 0 && downDown > 1)
+		{ down = downDown; axis = 1; }
+	if (id.z == 0 && backDown > 1)
+		{ down = backDown; axis = 2; }
+	if ((int)id.x == fieldLength - 1 && rightDown > 1)
+		{ down = rightDown; axis = 0; }
+	if ((int)id.y == fieldLength - 1 && upDown > 1)
+		{ down = upDown; axis = 1; }
+	if ((int)id.z == fieldLength - 1 && frontDown > 1)
+		{ down = frontDown; axis = 2; }
+
+	if (down > 1)
+	{
+		if (axis == 0)		field[index].value = getLodNoiseYZ(pos, sideSize * down);
+		else if (axis == 1) field[index].value = getLodNoiseXZ(pos, sideSize * down);
+		else if (axis == 2) field[index].value = getLodNoiseXY(pos, sideSize * down);
+	}
+	else field[index].value = getNoise(pos);
+
+	//if (down == 2)	field[index].value = 0;
+}
+
+[numthreads(8, 8, 8)]
+void GenerateFieldVertexes(uint3 id : SV_DispatchThreadID)
+{
+	if ((int)id.x == fieldLength - 1 || (int)id.y == fieldLength - 1 || (int)id.z == fieldLength - 1) return;
+
+	//Get Surrounding cells data
+	FieldCell c0 = field[GetIndex(id.x + 0, id.y + 0, id.z + 0)];
+	FieldCell c1 = field[GetIndex(id.x + 1, id.y + 0, id.z + 0)];
+	FieldCell c2 = field[GetIndex(id.x + 1, id.y + 0, id.z + 1)];
+	FieldCell c3 = field[GetIndex(id.x + 0, id.y + 0, id.z + 1)];
+	FieldCell c4 = field[GetIndex(id.x + 0, id.y + 1, id.z + 0)];
+	FieldCell c5 = field[GetIndex(id.x + 1, id.y + 1, id.z + 0)];
+	FieldCell c6 = field[GetIndex(id.x + 1, id.y + 1, id.z + 1)];
+	FieldCell c7 = field[GetIndex(id.x + 0, id.y + 1, id.z + 1)];
+
+	//Determine included vertexes
+	int cubeindex = 0;
+	if (c0.value > isolevel) cubeindex |= 1;
+	if (c1.value > isolevel) cubeindex |= 2;
+	if (c2.value > isolevel) cubeindex |= 4;
+	if (c3.value > isolevel) cubeindex |= 8;
+	if (c4.value > isolevel) cubeindex |= 16;
+	if (c5.value > isolevel) cubeindex |= 32;
+	if (c6.value > isolevel) cubeindex |= 64;
+	if (c7.value > isolevel) cubeindex |= 128;
+
+	//If no one clean
+	if (edgeTable[cubeindex] == 0)
+	{
+		int curVert = GetIndex(id.x, id.y, id.z) * 15;
+		int maxVert = curVert + 15;
+		for (; curVert < maxVert; curVert++) vertexes[curVert].position = 0;
+		return;
+	}
+
+	//Interpolate Vertexes
+	float3 vertlist[12];
+
+	if (edgeTable[cubeindex] & 1) {
+		vertlist[0] = VertexInterp(isolevel, c0.position, c1.position, c0.value, c1.value);
+		CheckBounds(vertlist[0]);
+	}
+	if (edgeTable[cubeindex] & 2) {
+		vertlist[1] = VertexInterp(isolevel, c1.position, c2.position, c1.value, c2.value);
+		CheckBounds(vertlist[1]);
+	}
+	if (edgeTable[cubeindex] & 4) {
+		vertlist[2] = VertexInterp(isolevel, c2.position, c3.position, c2.value, c3.value);
+		CheckBounds(vertlist[2]);
+	}
+	if (edgeTable[cubeindex] & 8) {
+		vertlist[3] = VertexInterp(isolevel, c3.position, c0.position, c3.value, c0.value);
+		CheckBounds(vertlist[3]);
+	}
+	if (edgeTable[cubeindex] & 16) {
+		vertlist[4] = VertexInterp(isolevel, c4.position, c5.position, c4.value, c5.value);
+		CheckBounds(vertlist[4]);
+	}
+	if (edgeTable[cubeindex] & 32) {
+		vertlist[5] = VertexInterp(isolevel, c5.position, c6.position, c5.value, c6.value);
+		CheckBounds(vertlist[5]);
+	}
+	if (edgeTable[cubeindex] & 64) {
+		vertlist[6] = VertexInterp(isolevel, c6.position, c7.position, c6.value, c7.value);
+		CheckBounds(vertlist[6]);
+	}
+	if (edgeTable[cubeindex] & 128) {
+		vertlist[7] = VertexInterp(isolevel, c7.position, c4.position, c7.value, c4.value); 
+		CheckBounds(vertlist[7]);
+	}
+	if (edgeTable[cubeindex] & 256) {
+		vertlist[8] = VertexInterp(isolevel, c0.position, c4.position, c0.value, c4.value);
+		CheckBounds(vertlist[8]);
+	}
+	if (edgeTable[cubeindex] & 512) {
+		vertlist[9] = VertexInterp(isolevel, c1.position, c5.position, c1.value, c5.value); 
+		CheckBounds(vertlist[9]);
+	}
+	if (edgeTable[cubeindex] & 1024) {
+		vertlist[10] = VertexInterp(isolevel, c2.position, c6.position, c2.value, c6.value);
+		CheckBounds(vertlist[10]);
+	}
+	if (edgeTable[cubeindex] & 2048) {
+		vertlist[11] = VertexInterp(isolevel, c3.position, c7.position, c3.value, c7.value);
+		CheckBounds(vertlist[11]);
+	}
+
+	//Generate Triangles
+	int curVert = GetIndex(id.x, id.y, id.z) * 15;
+	int maxVert = curVert + 15;
+	for (int i = cubeindex * 16; triTable[i] != -1; i += 3)
+	{
+		vertexes[curVert].position = vertlist[triTable[i]];
+		vertexes[curVert + 1].position = vertlist[triTable[i + 1]];
+		vertexes[curVert + 2].position = vertlist[triTable[i + 2]];
+
+		curVert += 3;
+	}
+
+	//Cleanup unused triangles
+	for (; curVert < maxVert; curVert++) vertexes[curVert].position = 0;
+}
+
+//--------------------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------------------
+
+
+float RayDistance(float3 rayOriginPos, float3 rayDestinyPos, float3 rayOrigin)
+{
+	float rayOriginNoise = getNoise(rayOriginPos);
+	float rayDestinyNoise = getNoise(rayDestinyPos);
+
+	int amount = 0;
+	if (rayOriginNoise > isolevel) amount++;
+	if (rayDestinyNoise > isolevel) amount++;
+
+	if (amount == 0) //En el aire
+	{
+		return -1;
+	}
+	else if (amount == 2) //En la tierra
+	{
+		return -2;
+	}
+	else
+	{
+		float3 hitPoint = VertexInterp(isolevel, rayOriginPos, rayDestinyPos, rayOriginNoise, rayDestinyNoise);
+		return length(hitPoint - rayOrigin);
+	}
+}
+
+[numthreads(16, 1, 1)]
+void Raycast(uint3 id : SV_DispatchThreadID)
+{
+	float rayStep = rayLength / 16;
+	float3 rayOriginPos = rayPos + rayDir * rayStep * id.x;
+	float3 rayDestinyPos = rayPos + rayDir * rayStep * (id.x + 1);
+	rayDistances[id.x] = RayDistance(rayOriginPos, rayDestinyPos, rayPos);
+}
+
+//--------------------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------------------
+
+RWStructuredBuffer<int> depths;
+uint width;
+uint height;
+float3 camPos;
+float3 camRight;
+float3 camUp;
+float3 camFwd;
+float rayOffset;
+
+const float maxFloat = 1000000000;
+
+#pragma kernel ClearDepths
+#pragma kernel MarchDepths
+
+int GetIndex2(int x, int y)
+{
+	return x + y * width;
+}
+
+[numthreads(32, 32, 1)]
+void ClearDepths(uint3 id : SV_DispatchThreadID)
+{
+	if (id.x > width || id.y > height) return;
+	int index = GetIndex2(id.x, id.y);
+	depths[index] = 100000000;
+}
+
+float RayDistance2(float3 rayOriginPos, float3 rayDestinyPos, float3 rayOrigin)
+{
+	float rayOriginNoise = getNoise(rayOriginPos);
+	float rayDestinyNoise = getNoise(rayDestinyPos);
+
+	int amount = 0;
+	if (rayOriginNoise > isolevel) amount++;
+	if (rayDestinyNoise > isolevel) amount++;
+
+	if (amount == 0) return -1;
+
+	float3 hitPoint = VertexInterp(isolevel, rayOriginPos, rayDestinyPos, rayOriginNoise, rayDestinyNoise);
+	return length(hitPoint - rayOrigin);
+}
+
+float near = 0.3;
+
+
+void MarchRay(int x, int y, int z)
+{
+	int index = GetIndex2(x, y);
+	float step = 0.2;
+	int halfWidth = width / 2;
+	int halfHeight = height / 2;
+	float rayOffsetX = ((int)x - halfWidth) / (float)halfWidth;
+	float rayOffsetY = ((int)y - halfHeight) / (float)halfHeight;
+
+	float originDepth = z * step + near;
+	float3 rayOriginPos =
+		camPos +
+		camFwd   * originDepth +
+		camRight * originDepth * rayOffsetX +
+		camUp    * originDepth * rayOffsetY;
+
+	float destinyDepth = (z + 1) * step + near;
+	float3 rayDestinyPos =
+		camPos +
+		camFwd   * destinyDepth +
+		camRight * destinyDepth * rayOffsetX +
+		camUp    * destinyDepth * rayOffsetY;
+
+	float camDepth = near;
+	float3 camRayPos =
+		camPos +
+		camFwd   * camDepth +
+		camRight * camDepth * rayOffsetX +
+		camUp    * camDepth * rayOffsetY;
+
+	float dist = RayDistance2(rayOriginPos, rayDestinyPos, camRayPos);
+	if (dist > 0) InterlockedMin(depths[index], (int)(dist * 100000));
+}
+
+[numthreads(32, 32, 1)]
+void MarchDepths(uint3 id : SV_DispatchThreadID)
+{
+	/*if (id.x >= width || id.y >= height) return;
+	int steps = 1;
+	int depth = id.z * steps;
+	for(int i = 0; i < steps; i++)
+		MarchRay(id.x, id.y, depth + i);*/
+}
+
+
+/*
+
+//Round coordinates
+float3 planetCenter = areaSize / 2;
+pos -= planetCenter;
+float normHeight = max(abs(pos.x), max(abs(pos.y ), abs(pos.z)));
+pos = normalize(pos) * normHeight;
+pos += planetCenter;
+
+*/
