@@ -1,6 +1,6 @@
 # GalaxyGenerator
 
-**DISCLAIMER**: Work In Progress, still lots to do and improve :).
+<h2>DISCLAIMER: Work In Progress, VERY rough code, still lots to do and improve :).</h2>
 
 Exercises about Planes Procedural Generation using Marching Cubes. Usage of Hierarchical Bounding Box for lod system.
 
