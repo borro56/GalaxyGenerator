@@ -10,6 +10,7 @@ float planetNoise(	float3 pos,
 					float smoothRange,
 					float cavesFrequency)
 {
+
 	//Calculate basic properties
 	float3 center = areaSize / 2;
 	float highRadius = areaSize.x / 2;
@@ -35,5 +36,6 @@ float planetNoise(	float3 pos,
 		diff <= -smoothRange ? 1 :
 		lerp(1, 0, (diff + smoothRange) / (smoothRange * 2));
 
-	return noise;
+	float caves = 1 - noise3(pos * cavesFrequency);
+	return noise - caves * caves * caves;
 }

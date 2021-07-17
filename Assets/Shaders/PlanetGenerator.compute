@@ -203,13 +203,15 @@ void GenerateFieldBase(uint3 id : SV_DispatchThreadID)
 	if ((int)id.z == fieldLength - 1 && frontDown > 1)
 		{ down = frontDown; axis = 2; }
 
-	if (down > 1)
+	field[index].value = getNoise(pos);
+
+	/*if (down > 1)
 	{
 		if (axis == 0)		field[index].value = getLodNoiseYZ(pos, sideSize * down);
 		else if (axis == 1) field[index].value = getLodNoiseXZ(pos, sideSize * down);
 		else if (axis == 2) field[index].value = getLodNoiseXY(pos, sideSize * down);
 	}
-	else field[index].value = getNoise(pos);
+	else field[index].value = getNoise(pos);*/
 
 	//if (down == 2)	field[index].value = 0;
 }

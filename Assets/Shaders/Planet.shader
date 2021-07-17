@@ -7,6 +7,7 @@
 		_Normals("Normals", 2D) = "white" {}
 		_NormalsOffset("Normals Offset", float) = 1
 		_Tiling ("Tiling", float) = 1
+		_AmbientColor ("Ambient", Color) = (0,0,0,0)
 	}
 
 	SubShader
@@ -34,6 +35,7 @@
 			sampler2D _MainTex;
 			sampler2D _MainTex2;
 			sampler2D _Normals;
+			float4 _AmbientColor;
 			float3 posOffset;
 			float3 lightDir;
 			float4 lightCol;
@@ -91,6 +93,7 @@
 				float4 tex1 = tex2D(_MainTex, i.fieldPos.yz * _Tiling) * blending.x +
 							  tex2D(_MainTex, i.fieldPos.xz * _Tiling) * blending.y +
 							  tex2D(_MainTex, i.fieldPos.xy * _Tiling) * blending.z;
+			
 
 				float4 tex2 = tex2D(_MainTex2, i.fieldPos.yz * _Tiling) * blending.x +
 							  tex2D(_MainTex2, i.fieldPos.xz * _Tiling) * blending.y +
@@ -98,11 +101,10 @@
 
 				//Lighting
 				float diffuse = max(0, dot(normal, lightDir));
-				float ambient = 0.1;
-				float lighting = min(1, diffuse + ambient);
+				float lighting = min(1, diffuse);
 
 				//Combining
-				return lerp(tex1, tex2, texDot) * lighting * (0.5 + lightCol * 0.5);
+				return lerp(tex1, tex2, texDot) * lighting * (0.5 + lightCol * 0.5) + _AmbientColor;
 			}
 
 			ENDCG
